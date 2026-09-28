@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <script src="https://cdn.jsdelivr.net/npm/p5@1.11.10/lib/p5.min.js"></script>
+
+  <style>
+    body {
+      margin: 20px;
+      font-family: Arial, sans-serif;
+    }
+
+    .controls {
+      margin-bottom: 20px;
+    }
+
+    .slider {
+      margin-bottom: 10px;
+    }
+
+    label {
+      display: inline-block;
+      width: 80px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="controls">
+
+    <div class="slider">
+      <label>X:</label>
+      <input id="xSlider" type="range" min="-1000" max="1000" value="0">
+      <span id="xValue">0</span>
+    </div>
+
+    <div class="slider">
+      <label>Y:</label>
+      <input id="ySlider" type="range" min="-1000" max="1000" value="0">
+      <span id="yValue">0</span>
+    </div>
+
+    <div class="slider">
+      <label>Z:</label>
+      <input id="zSlider" type="range" min="-1000" max="1000" value="500">
+      <span id="zValue">500</span>
+    </div>
+
+    <button id="saveButton">Save Image</button>
+
+  </div>
+
+  <script src="sketch.js"></script>
+
+</body>
+</html>
