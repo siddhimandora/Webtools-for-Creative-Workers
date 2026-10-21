@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chai_charcha</title>
+<!-- FAVICON: replace images/teacup-icon.png with your own teacup PNG/SVG file. -->
+<link rel="icon" href="chaiicon.png" type="image/png"> 
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  /* ============================================================
+     EDIT HERE: COLORS AND FONT OF REVEALED TEXT
+     For Google Fonts, add a <link> tag in <head> before <style>,
+     then put the font name in --memory-font below.
+     For a local font, see the @font-face example below.
+     ============================================================ */
+  :root {
+    --paper: #f4f3ee;
+    --ink: #34332e;
+    --wash: #c9bb9d;
+    --memory-font: 'Roboto Mono', monospace;  /* e.g. 'Times New Roman', serif */
+    --cursor-font: 'Roboto Mono', monospace;  /* font used for the word "pour" */
+    --cursor-size: 15px;
+  }
+  /* Optional local font:
+  @font-face {
+    font-family: 'MyMemoryFont';
+    src: url('fonts/my-font.woff2') format('woff2');
+  }
+  Then set --memory-font: 'MyMemoryFont', serif; above. */
+  * { box-sizing:border-box; }
+  html { scroll-behavior:auto; }
+  body { margin:0; background:var(--paper); color:var(--ink); font-family:var(--memory-font); }
+  .cups { transition:filter .42s ease,opacity .42s ease; display:grid; grid-template-columns:repeat(auto-fit,minmax(148px,1fr)); gap:46px 34px; padding:34px clamp(22px,3vw,52px) 110px; }
+  .cups.is-blurred { filter:blur(5px); opacity:.48; }
+  .cup { border:0; padding:14px 10px; min-width:0; background:transparent; color:inherit; cursor:pointer; opacity:.73; transition:opacity .2s,transform .2s; }
+  .cup:hover,.cup:focus-visible { opacity:1; transform:translateY(-2px); }
+  .cup:focus-visible { outline:1px dotted currentColor; outline-offset:2px; }
+  .cup pre { margin:0 auto; display:block; width:max-content; max-width:100%; text-align:left; white-space:pre; font:10px/1.12 'Courier New',monospace; font-variant-ligatures:none; letter-spacing:0; }
+  /* A translucent, frosted layer: the cups remain visible behind the memory. */
+  .veil { position:fixed; z-index:30; inset:0; display:grid; place-items:center;
+    padding:clamp(24px,7vw,90px); background:transparent;
+    opacity:0; visibility:hidden; pointer-events:none;
+    transition:opacity .65s ease,visibility .65s; }
+  .veil.visible { opacity:1; visibility:visible; }
+  .memory-content { max-width:min(720px,90vw); width:100%; text-align:center; opacity:0;
+    transform:translateY(18px);
+    transform-origin:center bottom;
+    transition:opacity .65s ease, transform .65s ease; }
+  .veil.visible .memory-content { opacity:1; transform:translateY(0); }
+  .memory-text.speaker-dad { font-style: italic; }
+  .memory-text.speaker-me { font-style: normal; }
+  .memory-text { font-family:var(--memory-font); white-space:pre-wrap; font-size:clamp(16px, 2vw, 28px);
+    line-height:1.46; font-weight:400; text-shadow:0 1px 12px var(--paper); }
+  .memory-image { display:block; max-width:100%; max-height:70vh;
+    width:auto; height:auto; object-fit:contain; margin:auto; }
+  /* Automatic columns ensure a generous minimum width at every viewport size. */
+  @media(max-width:500px) { .cups { grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:38px 22px; padding-inline:18px; } .cup pre {font-size:9px;} }
+  .pour-cursor { position:fixed; left:0; top:0; z-index:100; pointer-events:none;
+    font-family:var(--cursor-font); font-size:var(--cursor-size); font-style:italic; line-height:1; letter-spacing:.04em; color:var(--ink);
+    transform:translate(16px,17px); opacity:0; transition:opacity .16s ease; will-change:left,top; }
+  @media(hover:hover) and (pointer:fine) {
+    body, .cup {cursor:none;}
+    .pour-cursor.is-tracking {opacity:1;}
+    body.memory-open .pour-cursor {opacity:0;}
+  }
+  @media(prefers-reduced-motion:reduce) { *,*::before,*::after {transition-duration:.01ms!important;} }
+</style>
+</head>
+<body>
+<main class="cups" id="cups" aria-label="Tea-time memories"></main>
+<div class="pour-cursor" id="pour-cursor" aria-hidden="true"></div>
+<section id="veil" class="veil" aria-label="A memory" aria-hidden="true">
+  <div id="memory-content" class="memory-content"></div>
+</section>
+<script>
+  /* ============================================================
+     QUICK EDIT GUIDE
+     1. EDIT MEMORIES: find const MEMORIES below. The key is the
+        FIXED CUP NUMBER, e.g. 342: {type:'text', text:'...'}.
+        All 328 original entries have fixed unique cup numbers.
+     2. ADD IMAGE: replace an entry with:
+        342: {type:'image', src:'images/photo.jpg', alt:'...'},
+        or src:'https://example.com/direct-photo.png'
+     3. FONT: change --memory-font in :root above (Roboto Mono).
+     4. CURSOR: edit CURSOR_WORDS below, or --cursor-font.
+     5. FAVICON: replace images/teacup-icon.png in <head>.
+        Add your own icon image inside an images folder.
+     6. SOUND: edit playPing() below for pitch/volume.
+     NOTE: One memory per cup, no duplicates. Empty cups stay empty.
+     ============================================================ */
+  const CURSOR_WORDS = ['pour', 'simmer', 'boil', 'steep', 'stir', 'brew', 'sip', 'infuse', 'spill','measure', 'strain','sweeten','sip','gulp','cool','quench','hold'];
+  const TOTAL_CUPS = 1861; // <-- CHANGE NUMBER OF CUPS HERE
+  // Fixed-width characters and four leading spaces keep the rim aligned.
+  // Keep the spaces exactly as written and use a monospaced font.
+  const CUP = String.raw`    _________
+ .-'---------|
+( (|         |
+ '-.         |
+   '_________'
+     '-----'`;
+
+  // =============================================================
+  // YOUR MEMORIES — EDIT THIS SECTION
+  // To add memories, add a new numbered line before the closing }.
+  // Keep a comma after each entry except the last one.
+  // For multiple lines of text, use `backticks` instead of quotes.
+  // Examples (uncomment and customize these when ready):
+  // 7: { type:'text', speaker:'me', text:`First line. Second line.` },
+  // 13: { type:'text', speaker:'dad', text:`A sentence from Dad.` },
+  // 8: { type:'image', src:'images/my-tea-drawing.png', alt:'A drawing' },
+  // 9: { type:'image', src:'https://example.com/my-picture.jpg', alt:'A memory' },
+  // =============================================================
+  // =============================================================
+  // 328 ORIGINAL MEMORIES FROM YOUR PDFS (not rewritten)
+  // Main sequence: chai.pdf; related chai-dad.pdf entries interleaved.
+  // speaker:'dad' makes the memory italic; speaker:'me' uses regular Roboto Mono.
+  // Object KEY = fixed cup number (1–1861), not a visible label.
+  // Positions are deliberately staggered to reduce vertical clustering across window sizes.
+  // These cup assignments never change, and no entry is reused.
+  // For an image, replace any entry with:
+  // 123: {type:'image', src:'images/your-image.jpg', alt:'Memory'},
+  // OR src:'https://your-site.com/direct-image.png'
+  // =============================================================
+  const MEMORIES = {
+    3: {type:'text', speaker:'me', text:"Feels good to be home"},
+    6: {type:'text', speaker:'dad', text:"I like having chai with you in the middle of the day. See you cannot have this luxury elsewhere."},
+    9: {type:'text', speaker:'me', text:"Oh, they renovated this street."},
+    23: {type:'text', speaker:'me', text:"Whose shop is that."},
+    26: {type:'text', speaker:'me', text:"I din’t know you had trouble with your shoulder"},
+    29: {type:'text', speaker:'me', text:"How has the morale in the gym been? Is it going well? Do you have to look into things a lot or is it manageable without you?"},
+    43: {type:'text', speaker:'me', text:"I slept very late, still trying to process all this light"},
+    46: {type:'text', speaker:'me', text:"No dad, you are annoying me with this question now"},
+    49: {type:'text', speaker:'me', text:"JUST LET ME EAT THAT CUPCAKE! I NEED IT!!!"},
+    52: {type:'text', speaker:'me', text:"I get it, I am not supposed to let my emotions dictate the situation, but this was just some grade-A level bullshit"},
+    65: {type:'text', speaker:'dad', text:"I don’t think it was necessary to be so so upset about what mom said. I am not saying it’s justified the way she said it, there is some truth there and you need to see that."},
+    68: {type:'text', speaker:'dad', text:"It is completely in our hands to control our emotions and its not up to someone else how they make you feel. You need to be able to dictate that and not let something overpower you like this."},
+    71: {type:'text', speaker:'me', text:"Can we drive to the lake?"},
+    85: {type:'text', speaker:'dad', text:"Come, we will go for a walk after dinner."},
+    88: {type:'text', speaker:'me', text:"I like staying up late dad, the world shuts up so I can work then."},
+    91: {type:'text', speaker:'me', text:"Can we eat a wada pav?"},
+    94: {type:'text', speaker:'dad', text:"Do you want to eat out maybe?"},
+    111: {type:'text', speaker:'me', text:"Can you ask Nandu Kaka to take me to his alcohol storage? I want to look at labels. Field work."},
+    114: {type:'text', speaker:'me', text:"Can we go on a hike?"},
+    117: {type:'text', speaker:'me', text:"Can I go to Bombay?"},
+    129: {type:'text', speaker:'me', text:"Can we stop for some muffins?"},
+    132: {type:'text', speaker:'me', text:"Can we go for a movie?"},
+    135: {type:'text', speaker:'dad', text:"Do you want to go for a movie today?"},
+    145: {type:'text', speaker:'me', text:"Can I buy a new laptop?"},
+    148: {type:'text', speaker:'me', text:"Can I go to Delhi?"},
+    151: {type:'text', speaker:'me', text:"Can I go to Bombay?"},
+    154: {type:'text', speaker:'me', text:"Pops I will literally come home when I want. This is a non-issue for me."},
+    164: {type:'text', speaker:'dad', text:"Dont you think its too late to be coming home at 4am. What even are you doing in Jalgaon that you are out that late."},
+    167: {type:'text', speaker:'me', text:"I need to live my life, why is that such a cautionary experience for you."},
+    170: {type:'text', speaker:'me', text:"Pops you need to learn how to wake people up. Your tactic is so bad. I can’t wake up like this."},
+    173: {type:'text', speaker:'dad', text:"I tried waking you up in the morning, you weren't even moving."},
+    185: {type:'text', speaker:'me', text:"I don't understand this worry."},
+    188: {type:'text', speaker:'me', text:"Okay, you are allowed to worry for me, but there has to be a limit to the instructions."},
+    191: {type:'text', speaker:'me', text:"Yeah, I couldn’t sleep, my mind was running like crazy."},
+    211: {type:'text', speaker:'dad', text:"I have recorded a sleep meditation sound for you, start listening to it. I am not happy about how little you are sleeping."},
+    214: {type:'text', speaker:'me', text:"Pops I have been seeing someone."},
+    217: {type:'text', speaker:'me', text:"I really don't understand what your problem here is. What is it, you don’t trust me or my judgement?"},
+    220: {type:'text', speaker:'me', text:"Some ridiculous expectation to make him a friend."},
+    234: {type:'text', speaker:'me', text:"*sits silently*"},
+    237: {type:'text', speaker:'dad', text:"Why so silent today baccha? Is something on your mind?"},
+    240: {type:'text', speaker:'me', text:"I don’t want to wake up for Pranayam at 6 in the morning, my sleep is precious."},
+    243: {type:'text', speaker:'dad', text:"Siddhi I want you to start waking up early, there is a science to it. Tell me how can I help you."},
+    253: {type:'text', speaker:'me', text:"Pops you need to get on the Netflix band wagon. OTT is going to change the business model for the entertainment business. And it's better content than mainstream cinema and shows."},
+    256: {type:'text', speaker:'dad', text:"I want to watch Tom and Jerry, find some way for me to download it on my laptop."},
+    259: {type:'text', speaker:'me', text:"Can I skip that dinner? I feel like I am going to get bored. As it is, it's just a brag show for the adults, I don’t want to be part of some ego massage session. I know you will also be getting bored."},
+    271: {type:'text', speaker:'dad', text:"I was watching Kungfu Panda. Po is so sweet."},
+    274: {type:'text', speaker:'me', text:"Of course I am still talking to him. I am not seeing the issue."},
+    277: {type:'text', speaker:'me', text:"*sits silently*"},
+    280: {type:'text', speaker:'me', text:"I feel like you don't want to see my perspective. Whatever, I need to finish my assignment."},
+    291: {type:'text', speaker:'dad', text:"Siddhi I am sensing a lot of short tempered behavior from you. No one is trying to instigate you. If something is bothering you, you need to tell us. We will do our best to listen to you."},
+    295: {type:'text', speaker:'dad', text:"I think you are listening to answer back, I don't think you are listening to actually listen."},
+    300: {type:'text', speaker:'me', text:"Where can I go and play basketball pops?"},
+    305: {type:'text', speaker:'me', text:"Do you think this covid thing is going to stick around for long pops??? All my stuff is still in Bombay."},
+    308: {type:'text', speaker:'dad', text:"How is college going to handle the shift to online?"},
+    320: {type:'text', speaker:'me', text:"This online class thing is tough, I am literally sleeping with my softie in all the zoom classes."},
+    323: {type:'text', speaker:'dad', text:"Where do you want to sit and do your classes? I will have my office vacated if that helps you."},
+    326: {type:'text', speaker:'me', text:"Badepapa and Bai need to be schooled. They are entering the temple from the back door, this is some height of nonsense, they are older, they should not get covid that's why I am sitting at home. Mum and I are getting very tired of regulating their actions, you need to say something."},
+    329: {type:'text', speaker:'me', text:"I don’t understand what even is happening in class, I am sick and tired of seeing people in rectangles."},
+    342: {type:'text', speaker:'me', text:"So you and badepapa don’t really have the lockdown restriction because that's essential business industries. I see. Well that is better. Can I use your pass to move around in the city?"},
+    345: {type:'text', speaker:'me', text:"Gosh I miss Nathu’s chai. How is he making money during the pandemic?"},
+    348: {type:'text', speaker:'me', text:"Wait, are you telling me that smoking is going to prevent lung infection. Are you seeing the irony?"},
+    360: {type:'text', speaker:'me', text:"Classes are a dud, I feel like we are wasting money. Maybe you should just homeschool me. LOL. Remember that time you were teaching me about inertia and you proved the book wrong."},
+    363: {type:'text', speaker:'me', text:"Why are none of the private hospitals allowed to help? As if the civil hospital can handle this situation."},
+    366: {type:'text', speaker:'me', text:"So all the clients are getting trained online? Nice."},
+    369: {type:'text', speaker:'me', text:"Pop’s, my friends are calling and asking how bad mortality rates in Jalgaon are because some news made national headlines. This town only gets famous for all the wrong reasons."},
+    379: {type:'text', speaker:'dad', text:"We have phones in our life to access people, it's not supposed to be in our life to trouble us."},
+    382: {type:'text', speaker:'me', text:"Did you see the tomatoes I picked up from the farm?"},
+    385: {type:'text', speaker:'me', text:"We were all talking till 4am on HouseParty. Covid is mad, no one understands how to navigate it."},
+    388: {type:'text', speaker:'me', text:"Do you think we have gone a tad bit overboard with all the sanitizing in the house?"},
+    400: {type:'text', speaker:'me', text:"I don’t understand when the days are beginning and getting over. Its becoming so difficult to be productive and attend classes and act as if living at home all the time is normal. I really miss my friends. I MISS having fun."},
+    403: {type:'text', speaker:'me', text:"Yo, can I buy a new laptop?"},
+    406: {type:'text', speaker:'me', text:"My entire laptop is getting fried and I am not able to finish this final. It is insane how much we need to work on designing for a tomorrow where I don’t know how to get through today. I don't know why it's so tough to be here. It feels like a hostage situation. I hate this."},
+    409: {type:'text', speaker:'me', text:"Why won’t he just come home? Mom is worried sick and her anxiety is getting very difficult to handle for the two of us. They are both unreasonable. It’s just amazing how the onus falls on me to play good on both sides. Just perfect."},
+    421: {type:'text', speaker:'dad', text:"It should not be difficult for you to say sorry if you have messed up. It just means you have to do better."},
+    424: {type:'text', speaker:'me', text:"Yeah, this branding project is going well. But I think the professor is gaslighting me. Like she says I should do what I want, but then she will go in and change my colour scheme and my forms and everything. Very irritating. I was rallying for the one you liked, but she was so persistent."},
+    427: {type:'text', speaker:'me', text:"I was up late catching up with Sahyadri peeps. Everyone is back home. Everyone is making TikToks now. Great times."},
+    439: {type:'text', speaker:'me', text:"Bruno was snoring the entire time I was presenting my final. Even the jury on the other side heard it. Useless."},
+    442: {type:'text', speaker:'me', text:"I left a sheet mask for you in your room, did you use it? You need to take better care of yourself man."},
+    445: {type:'text', speaker:'me', text:"Can we drive down to Nasik for a couple of days? I wanna meet Sallo and Fifi."},
+    456: {type:'text', speaker:'me', text:"There is this really nice picnic spot where we can have Chai together. Its near this dam. I think it will be fun."},
+    459: {type:'text', speaker:'me', text:"Diwali cleaning is in full swing. Mom tried to talk me into getting rid of my old toys. I told her I am trying to make them vintage collectible pieces."},
+    462: {type:'text', speaker:'me', text:"Brunz is so happy to see Prudi. Did he forget that I was the one taking care of him for the last 6 months?"},
+    465: {type:'text', speaker:'me', text:"Pops on the way to the Farm, can we make 2 pit-stops? I want to have lunch at the dhaba and I want to stop at the lake view point. That road has the most perfect view of the valley."},
+    481: {type:'text', speaker:'me', text:"I have to start getting worried for my last final semester."},
+    484: {type:'text', speaker:'me', text:"Dad, can I go to Goa for New years?"},
+    487: {type:'text', speaker:'me', text:"At the end of the trip, we stayed in this really nice minimal stone themed property called Babu huts in Morjim. It was so peaceful. Like life was feeling normal again for a second."},
+    490: {type:'text', speaker:'me', text:"Pops when I had last used the car, there was something on the dash that i wasn’t understanding… So I just shut the car and I forgot to tell you. Maybe we should use mum’s car…"},
+    501: {type:'text', speaker:'me', text:"Dad I need to go to Nasik, it's Sallo's birthday."},
+    504: {type:'text', speaker:'me', text:"Last night, I was in the kitchen for a mid night snack, and I heard this weird sound, like something scratching. I got so scared, I woke Bruno up and he woke up and ran to the kitchen. And I realised there was a cat outside. And so did brunz. And he started barking, and the cat has not moved an inch. And brunz is going crazy."},
+    507: {type:'text', speaker:'me', text:"Pops I have to go to bombay?"},
+    521: {type:'text', speaker:'me', text:"I am feeling quite lonely here. Apart from classes, there is just nothing else and no one else to talk to. I know it's a lot of skipping town, but I don't know how else to cope with living at home. It’s not bad. But I get upset every Saturday and Sunday because I have nothing to do here."},
+    524: {type:'text', speaker:'dad', text:"Why are you feeling so low?"},
+    527: {type:'text', speaker:'me', text:"Mum’s birthday is getting closer, I was thinking of a Sangria party?"},
+    539: {type:'text', speaker:'me', text:"How can he keep an owl in his house?"},
+    542: {type:'text', speaker:'me', text:"Milo found this really old video of her birthday party. Surya is literally hitting everyone. I am dancing in the middle and Mum was also in it. And she looked so different. We all were so tiny"},
+    545: {type:'text', speaker:'me', text:"Dad, we are thinking of going to Mussorie, like all the Sayhadri peeps."},
+    555: {type:'text', speaker:'me', text:"Pop’s I think my passport needs a renewal"},
+    558: {type:'text', speaker:'me', text:"I have no idea what my advisor is even saying about my thesis. Let’s see now, I will figure it out."},
+    561: {type:'text', speaker:'dad', text:"How is your thesis going?"},
+    571: {type:'text', speaker:'me', text:"Pop’s I am scared. Is Bruno going to be okay? I feel like the doctor is missing out on something"},
+    574: {type:'text', speaker:'me', text:"He looks better today. He ate a bit also. Drink water. I think it will be fine now."},
+    577: {type:'text', speaker:'me', text:"Not able to concentrate on anything or articulate anything. I just want him back. I cannot be here."},
+    580: {type:'text', speaker:'me', text:"I hate the doctor for not diagnosing him. I don’t care about his error, this was so avoidable."},
+    597: {type:'text', speaker:'me', text:"I miss him so much. I cannot believe he went away so quickly."},
+    600: {type:'text', speaker:'dad', text:"I miss JR. so much. I feel so bad. Badepapa was also crying in the morning. Just bad."},
+    603: {type:'text', speaker:'me', text:"I am not able to cope with this pops."},
+    616: {type:'text', speaker:'dad', text:"You are my tiger, come on roarrr with me?"},
+    619: {type:'text', speaker:'me', text:"Jitu sir gave me some feedback. It's so ambiguous. Why don't people just say what they really want to say in the way they want to say it."},
+    622: {type:'text', speaker:'me', text:"Can we go get a wada pav? I will do conscious eating starting tomorrow."},
+    633: {type:'text', speaker:'me', text:"Can I go to Bombay?"},
+    636: {type:'text', speaker:'me', text:"Lol pops look at him, he is such a chunky boy! My arms are getting sore holding him."},
+    639: {type:'text', speaker:'me', text:"Champ was sitting alone in the room upstairs on that mattress on the floor. How did he even climb the stairs and what was he doing sitting alone in that room. I think we will have to puppy proof the house."},
+    649: {type:'text', speaker:'me', text:"Paw we will have to get the carpenter to stop by. Champ is teething and he has made powder out of all the door frames. He is such a lil heathen."},
+    652: {type:'text', speaker:'me', text:"That client better land, those PPE kits in that tiny 14 seater flight was torture. I don't understand how this is a legitimate airline."},
+    655: {type:'text', speaker:'dad', text:"Did you see that video I sent you? I thought you would enjoy it."},
+    658: {type:'text', speaker:'me', text:"Do you think we know anyone in the Municipality? I need to interview them."},
+    669: {type:'text', speaker:'me', text:"Pops try this filter out. It tells you which animal you resemble."},
+    672: {type:'text', speaker:'me', text:"Do you think we should throw a diwali party this time or it’s still very risky."},
+    675: {type:'text', speaker:'dad', text:"Okay think of what we should cook for diwali dinner for the family."},
+    687: {type:'text', speaker:'me', text:"I don't think this person knows what they want, and they are rejecting all my suggestions. I might have sent them like 6 different concepts. It’s really feeling like a waste of my time. And I feel like I am already at a monetary loss given how much time I have spent just having meetings."},
+    690: {type:'text', speaker:'dad', text:"Are you convinced about what kind of work you want to do? Then don’t take opinions from people who don’t know anything about your journey."},
+    693: {type:'text', speaker:'me', text:"Between this one, and this one, which one do you like?"},
+    696: {type:'text', speaker:'me', text:"Champ needs his vaccinations, which doctor do we take him to? The lack of options in this city is really annoying."},
+    712: {type:'text', speaker:'me', text:"My whole existence in Jalgaon can be summed up in 2 sentences. It’s literally me on my laptop and eating meals with the fam. There is no third thing. Just so stagnating."},
+    715: {type:'text', speaker:'me', text:"Prudi called me up yesterday. He was in a fix in Mexico. I didn't wanna say anything in front of mom. Did he call you? I didn't even know where he was."},
+    718: {type:'text', speaker:'me', text:"Diwali will feel weird without Prudi. I miss him."},
+    721: {type:'text', speaker:'me', text:"Can we get home by 4:10? I have a meeting at 4:30."},
+    734: {type:'text', speaker:'me', text:"I have been feeling this weird distance from all my friends. It’s sad."},
+    737: {type:'text', speaker:'dad', text:"I want you to be conscious of who is entering your life and how much time you want to give them from your day."},
+    740: {type:'text', speaker:'me', text:"Dad, it's getting cold!. OMG HOODIE WEATHER!!!"},
+    751: {type:'text', speaker:'me', text:"I need you to drop me at the Palod house."},
+    754: {type:'text', speaker:'me', text:"What are you learning in your singing class?"},
+    757: {type:'text', speaker:'dad', text:"I started singing classes. It’s fun, you should always be learning something new."},
+    760: {type:'text', speaker:'dad', text:"You want to join my singing classes?"},
+    771: {type:'text', speaker:'me', text:"Pops can we go to Ravi? I really wanna eat a Banjo."},
+    774: {type:'text', speaker:'me', text:"I have to receive payments, which account do I get it transferred to?"},
+    777: {type:'text', speaker:'dad', text:"Start having a vision on why you are working. I want you to be able to understand finances and learn how to make money and invest it.."},
+    780: {type:'text', speaker:'dad', text:"Will you be interested in taking a class about investments and money management?"},
+    795: {type:'text', speaker:'me', text:"Thesis is happening, it's just such a large topic and this whole online thing is not cutting it. Like Jitu is available on call, but it really feels like he is going through it. He has moved to Lonavala, it's a whole thing and I am getting feedback but I don’t understand how to implement it and there is no resource that I am getting pointed towards. I feel like I am gonna cry at the eleventh hour."},
+    798: {type:'text', speaker:'me', text:"Gosh pops, Aaru is so funny. We were making cookies and I saw the oven and all the print on the dials for temperature and the mode were faded. She took the tray and stuck it in the oven and just guessed the time and temperature and walked away. I was sure that cookies were going to burn and the oven would be on fire."},
+    801: {type:'text', speaker:'me', text:"I am feeling so unproductive and scattered. I literally don’t know what to do. And there are so many deadlines to meet. How am I supposed to take care of myself and do good work? Of course I will compromise on my sleep then."},
+    804: {type:'text', speaker:'dad', text:"It’s hectic, I understand. Do your best. The rest doesn't matter."},
+    817: {type:'text', speaker:'me', text:"I think we need to shop. Ever since covid we are bringing the same energy to everything. It’s so bad."},
+    820: {type:'text', speaker:'me', text:"There is too much tension in the house. It's all this pent up energy"},
+    823: {type:'text', speaker:'me', text:"Yesterday, I was literally in class, giving a presentation, and something happened downstairs, everyone was talking loudly, you could literally hear it on the other end of the zoom call. It's embarrassing dad, you need to say something. I don’t want to be in a position where I am shouting at everyone in the house."},
+    835: {type:'text', speaker:'me', text:"I am going to Nasik with Komal. We are just going to be at home and study and work. I need a change in scenery."},
+    838: {type:'text', speaker:'me', text:"I was trying to get through the Daniel Kahneman book. It's heavy. I am reading a page and reading it again to make sense of it. I don’t know, I don't feel smart enough to be reading this."},
+    841: {type:'text', speaker:'dad', text:"I think you should read books again. You used to read so much in Sahyadri."},
+    855: {type:'text', speaker:'me', text:"OMG, Pops there is a Belgian Waffle in Jalgaon now! Finally something."},
+    858: {type:'text', speaker:'me', text:"At the moment, there are 3 client projects and a thesis. This has to be the longest thesis discussion in the history of thesis. I am bored now. Wrap it up."},
+    861: {type:'text', speaker:'me', text:"I wanna go to Udaipur. There is so much art there. I think I will be so inspired. Can we go?"},
+    872: {type:'text', speaker:'me', text:"Wait, so now it's 12 people who have gate crashed my vacation. This is annoying."},
+    875: {type:'text', speaker:'me', text:"Pops, my drive storage is over. I need your card to upgrade it."},
+    878: {type:'text', speaker:'me', text:"The university office called me and said that I have not signed up for any jobs or placements and they were asking me what my plans are after university. Like I do not think I have been more pissed off about something today. The world around me is literally crumbling, I am barely able to make it through the day and these guys want me to push ahead and figure out my job situation in an economy where there are next to none positions available for an entry level designer. And this person on call kept asking, so what is your plan, what do you think you want to do? So stupid. I don’t want to be on this call is what I want to do."},
+    881: {type:'text', speaker:'dad', text:"Don’t be hasty to make any decision that is of paramount importance quickly. Take your time, really think about it and then answer it. If someone needs a decision from you, they can wait to hear from you."},
+    891: {type:'text', speaker:'me', text:"I took a picture of bruno yesterday, you literally cannot tell where his head is and where his bum is. He is so funny."},
+    896: {type:'text', speaker:'me', text:"Listen, you need to book my tickets to bombay. I have final book submission and I need to get this book printed and bound and then I am going to Lonavala for Ting's birthday. Also literally fifteen days later, I have my jury presentation so I need to be back in Bombay for that."},
+    901: {type:'text', speaker:'dad', text:"How is your jury supposed to be presented? You want to use flip charts, do something by hand, live demonstration?"},
+    904: {type:'text', speaker:'dad', text:"There are flights to bombay now."},
+    918: {type:'text', speaker:'me', text:"Dad, that trip was so hectic. I had to go to some weird place to pick up the books. No rickshaw wala was ready to take me back to Bandra. I couldn’t book a cab. It was so hot on the street and it was only 8am. I was about to cry cause there was no train connectivity to this place either. All this is happening when I have 4 books the size of phone directories in my hand cause that book guy did not have a bag and the bounding was so bad, one of my books has unraveled. Like it could not be worse. I hate bombay. But yeah, I cried a bit, finally some rickshaw wala saw me and must have felt bad so he agreed to take me to Bandra. I went and submitted that book. It was just too much. And I had probably slept like 1 hour in the night because Jitu sent me so many revisions that I had to edit the doc. It was not a vibe. It's done though. I will graduate at least."},
+    921: {type:'text', speaker:'me', text:"The jury loved the presentation, all the feedback was very positive. I am glad I worked through it."},
+    924: {type:'text', speaker:'dad', text:"Your acknowledgement in your thesis brought mom to tears."},
+    927: {type:'text', speaker:'me', text:"Paws the plan is that there are no plans. I just really want to chill. I need no one asking me for anything for a month at least. I need to sleep, and nourish myself and really catch up on things I missed doing. Cause what was that last year. I don't get it."},
+    939: {type:'text', speaker:'me', text:"Did Prudi share the campaign he shot with you? Pretty cool."},
+    942: {type:'text', speaker:'me', text:"I think you are loving the energy in the gym, badepapa was telling me how they have a little morning club where all these guys are walking together. I love that he has started to take care of himself. It’s such a positive change in him."},
+    945: {type:'text', speaker:'me', text:"Do we really want to go to Kashmir with everything that is happening there?"},
+    948: {type:'text', speaker:'me', text:"Yeah, that designer messed up my grad dress. I don’t know what to wear now…"},
+    960: {type:'text', speaker:'me', text:"Pops, is it okay if I go for a month-long trip to Europe? Like backpacking?"},
+    963: {type:'text', speaker:'me', text:"After Ganpati, I am thinking of going to bombay. Dont tell mum, I am dying my hair blue."},
+    966: {type:'text', speaker:'me', text:"It’s really funny when people ask you what your kids do, you have the most broken answer ever. Like I will make a template of what your answer should be and I can give it to you and mum to learn and you can just say that."},
+    978: {type:'text', speaker:'dad', text:"What should I say when people ask me that you are studying?"},
+    981: {type:'text', speaker:'dad', text:"I was walking to the office, and suddenly I had this memory of you practising your speech. So sweet."},
+    984: {type:'text', speaker:'me', text:"Dad, my entire feed is Italy right now, I really wanna go."},
+    1000: {type:'text', speaker:'me', text:"What are we doing about Maa’s health. What is their take on the surgery?"},
+    1003: {type:'text', speaker:'me', text:"The Visa person was asking for some papers. I don’t know what."},
+    1006: {type:'text', speaker:'me', text:"I checked flight tickets and made a tentative travel plan. I sent it to you. Did you read it?"},
+    1016: {type:'text', speaker:'me', text:"VFS has processed my application. I have to go for the visa interview to Bombay. Too many hoops to just explore the world. Irritating."},
+    1019: {type:'text', speaker:'me', text:"I sent you the movie ticket on our chat"},
+    1022: {type:'text', speaker:'me', text:"Why were we told to apply for a swiss visa when that is the most difficult one to get. This is so annoying. Like I can’t even reapply from another country cause they will take forever to send my passport back. Just dumb. What do I do with my vacation now?"},
+    1025: {type:'text', speaker:'me', text:"Roadtrip in Maghalaya… okay I guess."},
+    1035: {type:'text', speaker:'me', text:"Dad can we move the dates for the trip a little bit? There is a concert happening in Shillong which I want to attend."},
+    1038: {type:'text', speaker:'me', text:"I am still thinking about all the Rhino’s we saw, so cute. All the sun rises in the Northeast, those had to be the most magnificent ones that I have ever witnessed. Prudi would have loved it."},
+    1041: {type:'text', speaker:'me', text:"Don’t you think this whole marriage discussion at the age of 22-23 is so premature. Do you really think it's wise to be having these conversations with someone who literally doesn't know what is in store for them. Like I would not entertain this discussion if you and mum were to have it with me next year."},
+    1051: {type:'text', speaker:'me', text:"Look at this picture of bai and brunz, they are both sloth bearing in the living room."},
+    1054: {type:'text', speaker:'me', text:"Shalini and niharika wanna go on a grad trip in December. We are thinking of Goa."},
+    1057: {type:'text', speaker:'me', text:"Did you catch the fifa World Cup pops? It was so fun, Sallo and I went to a pub and it was packed. All of Bombay was on the streets."},
+    1068: {type:'text', speaker:'me', text:"Paw, so I got a call from Arsh last night. He was at Frankfurt airport at the time. We hadn’t spoken in months so I wasn't sure what was up. He was on the other line, crying. He told me that his dad passed away from a heart attack. I literally did not know what to say. I feel so bad. We are all going to Delhi to be there for him. Pranav will figure out the stay. I need you to book my tickets."},
+    1071: {type:'text', speaker:'me', text:"That trip was difficult. Like it was nice to see all my friends, Arsh was really brave, he really held it together. We were all at his place, just hanging out if he needed us. His friends from university stopped by. They just said that they were really sorry for his loss and then they sat in silence for 20 minutes, like they were just silent. It was excruciating, that entire situation. They should have just called or texted him. He looked so exhausted after they left."},
+    1074: {type:'text', speaker:'me', text:"Mum and I are going to Farm, you want to come with us?"},
+    1086: {type:'text', speaker:'me', text:"Anusha is back in town, we are going to meet up and just chill. Can you drop me to Aaru’s house?"},
+    1089: {type:'text', speaker:'me', text:"So mum is turning 50, we need to do a big party. Can I plan this and have a lot of creative control? I am thinking of calling all the masi’s and the kids. Some of moms old friends will also be nice. We could have a chef who makes a meal for everyone for the bring in. And the next day we have a party at the farm house with a live band and a good bartender?"},
+    1092: {type:'text', speaker:'dad', text:"See I was thinking of buying mom this ring, will she like it?"},
+    1095: {type:'text', speaker:'me', text:"So the guest list is looking like 83 odd people. Why do you guys have so many friends?"},
+    1109: {type:'text', speaker:'me', text:"I ordered this cake, but she completely changed the look. Why did she ask for reference photos if she just wanted to make whatever she wanted…"},
+    1112: {type:'text', speaker:'me', text:"I am thinking we can all coordinate with mum, Masi shared the designs with me, she is going to be wearing something metallic and it's a black dress and it's flowy. She has no idea, and I think she will love the dress."},
+    1115: {type:'text', speaker:'me', text:"Wow, the unicorn floatie was really a hit, someone was always sitting on it in the pool with a drink in their hand."},
+    1126: {type:'text', speaker:'me', text:"This over discussion of Aaru falling on her head. She is clumsy, there was water, she was tipsy and she fell. The story we have to maintain in front of everyone though is that she fell because she slipped. That's all. Too many people in the town are getting to know about this, its getting ridiculous."},
+    1129: {type:'text', speaker:'me', text:"Not having fun with work. I need a little more than just this."},
+    1134: {type:'text', speaker:'me', text:"Can we go to the lake?"},
+    1140: {type:'text', speaker:'me', text:"Bai’s BP was not consistent, you might have to take her to Rahul Sir."},
+    1144: {type:'text', speaker:'me', text:"I was on a 2 hour long call with Akshata. She is doing a really cool masters with tech and art. I like the kind of work she is making, I want to explore this avenue. I don't think it makes sense to apply for masters in Europe this year. I need to build my profile so I am just going to do that. I am not seeing the point of going into debt for things that I already know. Living in milan would be amazing though."},
+    1150: {type:'text', speaker:'dad', text:"Look beta, I have always been of the opinion that knowledge is something that you can always use. You want to learn something, don’t think about the money. That is my responsibility."},
+    1153: {type:'text', speaker:'me', text:"Should we go for a himalayan trek together? I think you will like it."},
+    1156: {type:'text', speaker:'me', text:"The client meeting was good. It's a good retainer to have. The van-gogh thing that I was telling you about it was such a scam. Like cool projection everywhere. But people had just turned it into a photo op. It was really interfering with the experience."},
+    1170: {type:'text', speaker:'me', text:"I really love it when Bruno comes to sit at the office while we are working and then he starts to snore. At least someone is taking advantage of all the hard work."},
+    1173: {type:'text', speaker:'me', text:"Maa is not well again, these guys really are delaying the surgery for what joy. Have you tried to have a conversation with them?"},
+    1176: {type:'text', speaker:'me', text:"How has work been? Anything exciting?"},
+    1179: {type:'text', speaker:'me', text:"So, we were all at this restaurant, and suddenly the guys wanted to go for a drive. Neyo and I sat in Harshil's car. These other boys drive really rashly. We got to the spot, and suddenly one of the guys took Harshil's keys and sped away. Those guys totaled the car, Ninad had to come pick me and my friends up at 1am. I dint want to say anything, cause there was just so much drama there, but… statue of limitations, just letting you know this happened."},
+    1189: {type:'text', speaker:'me', text:"Pops I am going to Sahyadri with Fifi and Sallo. I think it will be nice to visit school."},
+    1192: {type:'text', speaker:'me', text:"I cried in the train this time, there were people snoring in synchrony. That was torture for sure."},
+    1195: {type:'text', speaker:'me', text:"School was fun. It was nice to reconnect with my roots, we had a great time. Fifi got quite sentimental and I get it with her leaving for Plymouth and everything. We are all just growing up and still trying hard to be in each other's lives. Its difficult but worth it. Rekha akka and Telang sir asked about you."},
+    1212: {type:'text', speaker:'dad', text:"Who are you in touch with these days from school?"},
+    1215: {type:'text', speaker:'me', text:"How has the gym been going? With Ninad’s injury and all. Who is looking into the day to day work?"},
+    1218: {type:'text', speaker:'me', text:"Naav, annu, kabs and i are thinking of going to Udaipur and then Jodhpur?"},
+    1221: {type:'text', speaker:'me', text:"Dad, you would love this book I am reading, it's by Phil Knight. It’s about Nike. Just really well written. I feel like I have read a really good book after a very long time. I just started it again."},
+    1233: {type:'text', speaker:'me', text:"Pops, I found you that bartending course in Barcelona. You can go learn that and I can travel."},
+    1236: {type:'text', speaker:'dad', text:"I really want to learn bartending, find some course for me."},
+    1239: {type:'text', speaker:'me', text:"Jalgaon is really getting a cricket culture with all these matches but the representation is so off. Like all the women just stand on the side and watch all these guys playing. Sports in India really becomes such an imbalanced ecosystem in terms of gender after the age of 16."},
+    1242: {type:'text', speaker:'me', text:"I need someone to come and install my LED lights in my room."},
+    1249: {type:'text', speaker:'me', text:"Mom wants me to share my location with her. Feels a little unnecessary"},
+    1252: {type:'text', speaker:'me', text:"Did you get my tickets sorted for Bombay? It's important that I reach."},
+    1255: {type:'text', speaker:'me', text:"My jaw is hurting a lot, like it's hurting my ears also."},
+    1268: {type:'text', speaker:'dad', text:"Let’s get your lasik surgery done now. Less things to worry about in life."},
+    1271: {type:'text', speaker:'me', text:"So Aaru called me the other day. She is not doing too well. I want to go to Ahmedabad to meet her. I wanted to check out a couple of masters programmes too so i can combine the trip."},
+    1274: {type:'text', speaker:'me', text:"Ahmedabad was chill. I don’t think I can study there. The university brand sounds amazing but I don't see the infrastructure that should be there to support creatives."},
+    1277: {type:'text', speaker:'me', text:"I have met Shruti a couple of times. I cannot say much now because I don’t really know her that well."},
+    1289: {type:'text', speaker:'me', text:"Do you think it's a little fast, we just met her and the family, the engagement in a month seems soon dad."},
+    1292: {type:'text', speaker:'me', text:"I spoke to the flower person. He will come in the morning, at 6am to decorate the flowers. Do you know when Bittu Masi is reaching? I can probably ask her to get the cake from Pune."},
+    1295: {type:'text', speaker:'me', text:"Wow, that was a lot. The entire ordeal, I am exhausted. It was like a circus show. And how dumb are people. Like was there any thought or any filter before they spoke. Like I am astonished."},
+    1308: {type:'text', speaker:'me', text:"Mum is feeling very unsettled. I think you need to hear her out."},
+    1311: {type:'text', speaker:'dad', text:"We can agree to disagree but that does not mean we are both wrong. We are just different. And if we want to live with each other happily, you try to understand me and I will try to understand you."},
+    1314: {type:'text', speaker:'me', text:"Have you spoken to Prudi at all?"},
+    1324: {type:'text', speaker:'me', text:"Lol Neha didi thinks I should say something. What difference is it going to make. He wants to listen to no one."},
+    1327: {type:'text', speaker:'me', text:"I am going to Nasik. I just need a little breather."},
+    1330: {type:'text', speaker:'dad', text:"Can you see yourself living in Jalgaon?"},
+    1344: {type:'text', speaker:'me', text:"Komal and Bunny might be getting engaged. Everything is happening so suddenly."},
+    1347: {type:'text', speaker:'me', text:"Has there been any movement on the Wedding dates front? Like any communication?"},
+    1350: {type:'text', speaker:'me', text:"I have signed a new retainer. I think it will be a good one. Clients are from Bombay."},
+    1353: {type:'text', speaker:'dad', text:"How did your client meeting go?"},
+    1368: {type:'text', speaker:'me', text:"I need to learn how to code, who do I go to learn this from? I think it will be a good brain activity for me."},
+    1371: {type:'text', speaker:'me', text:"Fifi wants to go to goa before she leaves for Plymouth, we are making a trip out of it. Can you get my tickets sorted?"},
+    1374: {type:'text', speaker:'me', text:"There is too much anxiety in the house pops. Like I am not understanding it."},
+    1377: {type:'text', speaker:'me', text:"Masi called, should we go to Kenya in September. I feel like we need the break. All of us need to just chill out. The same two conversations, they are literally not heading anywhere. We are all just exhausted."},
+    1388: {type:'text', speaker:'me', text:"I feel this over-bearing sense of responsibility to everyone in the house and I feel like I need to keep working hard so that I can provide for you all and take care of you guys."},
+    1391: {type:'text', speaker:'me', text:"I don’t know. Mom and Prudi need to sit and have a conversation but they are both behaving the exact same way. And of course we can't say this to them. Like I rather shoot myself in the foot than have this conversation."},
+    1394: {type:'text', speaker:'dad', text:"Look I understand your frustration but I have to remind you, he needs us more than we need him. I know you are already patient but we cannot do anything about that here. You will just have to have more empathy."},
+    1411: {type:'text', speaker:'me', text:"I am not able to sleep. My recovery has not been good. Just sore from the workout and its not feeling normal only."},
+    1414: {type:'text', speaker:'me', text:"I feel like the camel from the camel story. Where do I sit and make peace because of other people's mess? Like I am unable to turn a blind eye to it."},
+    1417: {type:'text', speaker:'dad', text:"Learn to emotionally detach yourself from the problem. Half the times our reaction to it is what is making the problem bigger."},
+    1420: {type:'text', speaker:'dad', text:"Don’t expect life to be fair. You will be disappointed."},
+    1434: {type:'text', speaker:'dad', text:"I want to tell you a story. It's about a camel. A merchant loaded his camel with heavy goods for a long journey. He piled on sacks of grain, heavy blankets, and iron pots until the camel was visibly shaking under the immense weight. Ignoring the animal's exhaustion, the merchant wanted to pack every last item. He looked around, found a single, feather-light piece of straw, and tossed it onto the top of the towering pile. Instantly, the camel's knees buckled, and it collapsed to the ground. It wasn't the weight of the straw that crushed the camel, but the cumulative weight of everything it was already forced to carry."},
+    1437: {type:'text', speaker:'me', text:"Mum was asking what to do about the clothes… I was just thinking if we know what functions we are planning on hosting. I can really empathize with her dad. She is not wrong with her sense of planning at all."},
+    1440: {type:'text', speaker:'me', text:"So were we able to finalise the venue for the wedding?"},
+    1452: {type:'text', speaker:'me', text:"Remember the masters I was talking about in NYU. The tech and art curse at NYU, the applications have started. I am thinking of applying."},
+    1455: {type:'text', speaker:'me', text:"Dad, I think there needs to be some intervention, someone needs to speak to Prudi. I literally do not know how to have a conversation with him. Everyone is getting hurt with this behavior."},
+    1458: {type:'text', speaker:'me', text:"It’s so funny, people are lying to me and then they are confused when I don't want to participate in their happiness. Like what is expected out of me."},
+    1471: {type:'text', speaker:'me', text:"Ninad is mad at me because of something that I wasn’t even supposed to take care of. There is some misunderstanding here about what my involvement is with his relationship. Why am I being treated like the fall guy just cause he doesn’t have guts to have the conversation with the actual person who he has an issue with. Just such taken for granted behavior."},
+    1474: {type:'text', speaker:'me', text:"Badepapa was really upset. He has never confided in me like this and was really unhappy about the whole situation at home. I am feeling so broken about this thing, like I am lying to everyone when I say that things will be okay and we will be fine cause I don’t know. And he is not the kind of person whoever discusses such things with me. And I am lying."},
+    1477: {type:'text', speaker:'me', text:"Do you think this is sustainable dad? This constant explosiveness."},
+    1480: {type:'text', speaker:'me', text:"I have sent you a checklist of things we need to make sure are taken care of during the wedding."},
+    1488: {type:'text', speaker:'me', text:"Lol dad, all this free time, what should we do now."},
+    1491: {type:'text', speaker:'me', text:"I dint end up applying for the course. Everything around me was feeling so volatile, I didn’t know how to leave you and mum and the fam between all this and just go."},
+    1494: {type:'text', speaker:'dad', text:"Siddhi you are the kid. I am the parent. You do not need to worry about how we will be after you leave. We will figure it out. You must apply to go and I want you to email them to ask about admissions. We cannot be a factor of anxiety in your life."},
+    1497: {type:'text', speaker:'me', text:"Work will pick up again. I just need to find my bearings."},
+    1512: {type:'text', speaker:'dad', text:"What kind of work do you want to pick up? How can I help you?"},
+    1515: {type:'text', speaker:'me', text:"So I reached out to NYU. They said the admissions are closed but late applications are open. I can try my luck but it’s extremely difficult as it's rolling admissions. So I need to apply in 3 days now."},
+    1518: {type:'text', speaker:'me', text:"I think I need a sofa at the office so I can nap while I am working long hours."},
+    1521: {type:'text', speaker:'me', text:"Dad, maybe I need to learn how to drive so that you can stop driving me everywhere."},
+    1533: {type:'text', speaker:'dad', text:"Sid, I feel like you need to learn how to drive and ride a scooter. I don't know what you are scared of on the road."},
+    1536: {type:'text', speaker:'me', text:"Komal is so happy, it warms my heart."},
+    1539: {type:'text', speaker:'me', text:"I think i will hear back from them in Feb or March. Lets see."},
+    1555: {type:'text', speaker:'me', text:"I went for a walk in the morning at Aryan's farm. It was so nice. I caught the sunrise there."},
+    1558: {type:'text', speaker:'me', text:"So I got waitlisted. It's not looking good. I should just focus on projects here now. Let's see what happens."},
+    1561: {type:'text', speaker:'me', text:"Dad can we go get some wada pav?"},
+    1564: {type:'text', speaker:'me', text:"Adi and Aryan are so sweet with Bruno."},
+    1576: {type:'text', speaker:'me', text:"I feel like I am trying to work hard and be proactive, but I am just getting derailed every time. It's really disheartening. I don’t know what to do ahead and I am feeling so exhausted and stuck."},
+    1579: {type:'text', speaker:'dad', text:"Siddhi I want you to be able to look at things from the mentality of a fighter, not a victim. Things happen to us, what do we make of it?"},
+    1582: {type:'text', speaker:'me', text:"The sky is so dramatic today. I will go for a drive after chai."},
+    1593: {type:'text', speaker:'me', text:"Can we go for Misal on Sunday?"},
+    1596: {type:'text', speaker:'me', text:"Do you think we should create a kombucha brand? I think globally there is more importance of fitness now. We can think of some kinds of extensions to TFC."},
+    1599: {type:'text', speaker:'me', text:"I found my edition of the school Magazine that I had worked on. I sometimes feel like I peaked there. I am not seeing a growth in myself that I am happy with. Its shameful"},
+    1611: {type:'text', speaker:'me', text:"Dad, I saw a whole Mongoose family next to the office today. They were so cute"},
+    1614: {type:'text', speaker:'me', text:"So you know how we were all going to Chandon to celebrate right. Well the road to chandon is not made for a low clearance car. Komal was driving the Merc and there were a lot of potholes and I think she didn't see one, and it hit the bottom very hard. So yeah, the car broke down and we were stranded. Not good as that place was quite remote and there was a leopard threat. The tow truck took 4 hours to come and we were just getting drenched in the rain. Just bad judgement all around."},
+    1617: {type:'text', speaker:'me', text:"There is the India art fair in Bombay. I want to go and check it out. I think it will be good for my brain. I am not seeing anything different so it’s all feeling like the same thing over and over again."},
+    1620: {type:'text', speaker:'me', text:"It's all kinda the same and not the same. I am getting caught up with all these different projects, there is no balance in my life and it's just the same story. If I don't work, I won't know how to fill up my time here and it's not like work is fun or anything. It's diverse but they are all running behind the same thing which is not something I am enjoying. But I cannot say no to this, cause I cannot sit ideally at home."},
+    1624: {type:'text', speaker:'dad', text:"See if this is actually worth your time. You don’t need to do things for the sake of doing things."},
+    1639: {type:'text', speaker:'me', text:"I feel like I am fighting with everyone these days. There is literally no one who understands that I actually do have work. Even if I hate it, I am accountable. Like have you seen how when you get a call or badepapa gets a call, everyone is quiet and we let you guys finish your conversation. I was on a call with my client and everyone wanted to have a conversation with me at that time. Like no respect whatsoever. How much am I supposed to adjust with this baboon-like behaviour? You guys are behaving like children."},
+    1642: {type:'text', speaker:'dad', text:"I can understand your frustration but please remember, in life there will always be things that you do not want to do but you have to do them. The faster you make your peace with it and don’t associate impatience to it, the better it will be for you."},
+    1645: {type:'text', speaker:'me', text:"Today someone has reached out to me to ask if I want to take ona branding project for men's inner wear. I am just not seeing the humour here. This has to be the lowest point for me."},
+    1656: {type:'text', speaker:'me', text:"I was up late applying for some contract jobs, I cannot keep doing this gig waiting for something to happen."},
+    1659: {type:'text', speaker:'me', text:"A bunch of my college friends are getting married. I don’t know how to feel about this… like so young. Whatever."},
+    1662: {type:'text', speaker:'me', text:"Honey and I are gonna go for a walk later. Its been nice to have a neighborhood friend. She gets how stuck we both feel living here. I feel things after covid have just been weird and I don’t know how to go back out there the same way I would earlier. Maybe this is my life. I sometimes wonder if I should move to bombay or goa. All my work is in Bombay."},
+    1665: {type:'text', speaker:'me', text:"I feel like I am that main character in the Truman show, and suddenly I remember, no one cares about what I am up to except for me."},
+    1672: {type:'text', speaker:'me', text:"Getting closer to your birthday pops, what can I get you? New speakers, new mike?"},
+    1675: {type:'text', speaker:'me', text:"When badepapa heard that I got in, he came upstairs cause I was just frozen and he just looked at me and said that now that you will go away to New York, you will forget about us. And that made me so sad."},
+    1678: {type:'text', speaker:'me', text:"Mom is reading all this news about things that happen in New York and she is getting riled up. Please talk to her. My visa process hasn't even started yet. And please don't tell people about me getting in, let me get my visa in hand. I know there is no nazar but there is bad energy."},
+    1681: {type:'text', speaker:'me', text:"Bai was crying today while praying."},
+    1695: {type:'text', speaker:'me', text:"Did you look at all those files I sent you? Its finances and visa stuff. Can you please look at it too, it does not make sense to me."},
+    1698: {type:'text', speaker:'me', text:"Need to start looking at visa dates pops. We cannot snooze on this."},
+    1701: {type:'text', speaker:'me', text:"I am going to go visit Saloni for a couple of days in Nasik. She has opened a cafe, and I want to visit it."},
+    1716: {type:'text', speaker:'me', text:"We had this gin when I was in nasik dad, you would have loved it."},
+    1719: {type:'text', speaker:'me', text:"So I was just looking at how this entire stretch of time has to be spent before I leave. There are three more months. I am thinking I will work for two more and then the rest of the time I can go visit Farm, pack things up and do all that. Get a little ready to move away. Probably learn how to cook. Apartment hunt, figure out where I could live. Mom was on call with Bhua- nani, and spoke to all of them. They seem sweet."},
+    1722: {type:'text', speaker:'me', text:"Did you book tickets for the biometric appointment?"},
+    1725: {type:'text', speaker:'me', text:"Pops you need to get on board with what is happening here. I cannot explain the same things three times. There is only so much time and all of this is new information for me also. Genuinely, read the emails that I am sending you. I don’t want my visa rejected just cause they did not understand the financial breakdown excel sheet!"},
+    1738: {type:'text', speaker:'dad', text:"Siddhi you need to tell me things you need done, how am I going to understand. This is new for me also and I am doing whatever I can to help you."},
+    1741: {type:'text', speaker:'me', text:"I don’t know, I was just thinking about my trajectory. I remember always asking you for permission to go, travel, I would inform you. This opportunity, I don't ask you at all. I just said I am going. And to top it all off, I really did not do the math of finances. I know we have planned for this, but I don’t want this to be a strain on us. I still want to go."},
+    1744: {type:'text', speaker:'dad', text:"You are doing this for yourself. If you think that it is not something you want to do, just leave it and come back. You don’t have to prove anything to anyone, especially not us. We know who you are and what you are capable of doing. And you make us proud everyday."},
+    1747: {type:'text', speaker:'me', text:"This entire process makes me feel so icky. The amount of times I have had to prove my intention. And so much scrutiny."},
+    1758: {type:'text', speaker:'me', text:"I chose my classes that I would take. They sound quite eccentric. I am quite excited for the kind of work I will be able to create."},
+    1761: {type:'text', speaker:'me', text:"I will really miss you being around all the time dad. Thank you for raising me well."},
+    1764: {type:'text', speaker:'dad', text:"I will get a little lonely after you leave. But it's okay, this is a great opportunity, you must go."},
+    1774: {type:'text', speaker:'dad', text:"It's so special to have you in the house, you keep us entertained and young and you care for us, of course it's selfish for us to expect you to live your life centered around us. Like I said, you are special to us."},
+    1777: {type:'text', speaker:'me', text:"I am getting a little scared. What if I am the most talentless person there and I just crack under pressure."},
+    1780: {type:'text', speaker:'me', text:"Have you seen the list mom has made? How much is she going to fit in 2 bags?"},
+    1792: {type:'text', speaker:'me', text:"Has there been an update on my visa getting processed? Has Bludart received it?"},
+    1795: {type:'text', speaker:'me', text:"Did you reach out to Sagar kaka about my legal papers and affidavits? Should I do it?"},
+    1798: {type:'text', speaker:'me', text:"I am not able to find a credible source to rent in New York. Why did everyone say I will find something when I am literally finding nothing."},
+    1812: {type:'text', speaker:'dad', text:"Have you been able to find an apartment in New York?"},
+    1815: {type:'text', speaker:'me', text:"Gosh the stack of papers I am supposed to take. I cannot keep anything else in my cabin luggage."},
+    1818: {type:'text', speaker:'dad', text:"Do you want to take your desktop with you? I will figure out a way, you should have your tools on you to be able to work."},
+    1832: {type:'text', speaker:'me', text:"I need luggage tags, I don't want to lose all my luggage when I reach a new country."},
+    1835: {type:'text', speaker:'me', text:"Will you and mum promise to not argue and fight so much after I leave?"},
+    1838: {type:'text', speaker:'me', text:"All these days have been so anxiety inducing and there is just so much that I have had to do. I have just not been able to rest. Plus I feel so drained about leaving and just not able to envision anything."},
+    1841: {type:'text', speaker:'me', text:"I feel like I am 10 again and you are dropping me off to school , it feels so Pavlovian."},
+    1852: {type:'text', speaker:'me', text:"Bags are almost packed, have you packed your bag? I am very sleepy today, so I couldn't sleep all night. Bai’s BP has been pretty bad. You need to speak to her to calm her down, she is overthinking it. Just tell her I will be back in four months, she is thinking I am going away forever."},
+    1855: {type:'text', speaker:'dad', text:"Everyone in the house is getting a little misty about the thought of you leaving. I explained to Bai that you are coming back in four months, in two hours her BP was back in place."},
+    1858: {type:'text', speaker:'dad', text:"So the flight is booked, visa is secured, all your papers are in place. Bags are packed. Now I will have to start this visa process all over again for me and mum."},
+    1861: {type:'text', speaker:'me', text:"I will miss you too dad. I don’t even know how to make chai."},
+  };
+  // Cups without an assigned memory stay quiet.
+  function memoryFor(n) { return MEMORIES[n] || null; }
+
+  const grid=document.getElementById('cups');
+  const veil=document.getElementById('veil');
+  const content=document.getElementById('memory-content');
+  const pourCursor=document.getElementById('pour-cursor');
+  pourCursor.textContent = CURSOR_WORDS[0];
+  let lastCursorCup = null;
+  let cursorStep = 0;
+  // Gentle ping: generated in the browser, no audio file needed.
+  // Some browsers require one click/tap on the page before playing sound.
+  let audioContext;
+  function playPing() {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      audioContext ||= new AudioCtx();
+      if (audioContext.state !== 'running') { audioContext.resume().catch(() => {}); return; }
+      const osc = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+      const t = audioContext.currentTime;
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(780, t);
+      osc.frequency.exponentialRampToValueAtTime(1050, t + 0.13);
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.045, t + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.26);
+      osc.connect(gain); gain.connect(audioContext.destination);
+      osc.start(t); osc.stop(t + 0.28);
+    } catch(e) { /* Silent fallback if browser disallows audio. */ }
+  }
+  document.addEventListener('pointerdown', () => { if (audioContext?.state === 'suspended') audioContext.resume().catch(() => {}); }, {passive:true});
+  const finePointer=window.matchMedia('(hover:hover) and (pointer:fine)');
+  document.addEventListener('pointermove',event=>{
+    if(!finePointer.matches || event.pointerType!=='mouse') return;
+    pourCursor.style.left=event.clientX+'px';
+    pourCursor.style.top=event.clientY+'px';
+    pourCursor.classList.add('is-tracking');
+  },{passive:true});
+  document.addEventListener('pointerout',event=>{
+    if(!event.relatedTarget) pourCursor.classList.remove('is-tracking');
+  });
+  let activeCup=null;
+  const fragment=document.createDocumentFragment();
+  for(let n=1;n<=TOTAL_CUPS;n++) {
+    const button=document.createElement('button');
+    button.type='button'; button.className='cup'; button.dataset.number=n;
+    button.setAttribute('aria-label',`Reveal memory ${n}`);
+    const art=document.createElement('pre'); art.setAttribute('aria-hidden','true'); art.textContent=CUP;
+    button.append(art);fragment.append(button);
+  }
+  grid.append(fragment);
+
+  function reveal(button) {
+    if(activeCup===button) return;
+    const n=Number(button.dataset.number);
+    const item=memoryFor(n);
+    if(!item) { closeMemory(); return; }
+    activeCup=button;
+    playPing();
+    content.replaceChildren();
+    if(item.type==='image') {
+      const img=document.createElement('img');
+      img.className='memory-image';
+      img.alt=item.alt || 'A tea-time memory';
+      img.src=item.src;
+      img.addEventListener('error',()=>{
+        if(activeCup!==button) return;
+        closeMemory(button);
+      },{once:true});
+      content.append(img);
+    } else {
+      const words=document.createElement('div');
+      words.className='memory-text ' + (item.speaker === 'dad' ? 'speaker-dad' : 'speaker-me');
+      words.textContent=item.text;
+      content.append(words);
+    }
+    document.body.classList.add('memory-open');
+    grid.classList.add('is-blurred');
+    veil.classList.add('visible');
+    veil.setAttribute('aria-hidden','false');
+  }
+
+  function closeMemory(button) {
+    if(!activeCup || (button && activeCup!==button)) return;
+    activeCup=null;
+    document.body.classList.remove('memory-open');
+    grid.classList.remove('is-blurred');
+    veil.classList.remove('visible');
+    veil.setAttribute('aria-hidden','true');
+  }
+
+  // The frosted layer never catches pointer events. The cup retains hover
+  // until the cursor really leaves its bounds, then the memory dissolves.
+  grid.addEventListener('pointerover',event=>{
+    if(event.pointerType!=='mouse' && event.pointerType!=='pen') return;
+    const cup=event.target.closest('.cup');
+    if(cup && !cup.contains(event.relatedTarget)) {
+      if (lastCursorCup !== cup) {
+        cursorStep = (cursorStep + 1) % CURSOR_WORDS.length;
+        pourCursor.textContent = CURSOR_WORDS[cursorStep];
+        lastCursorCup = cup;
+      }
+      reveal(cup);
+    }
+  });
+  grid.addEventListener('pointerout',event=>{
+    const cup=event.target.closest('.cup');
+    if(cup && !cup.contains(event.relatedTarget)) closeMemory(cup);
+  });
+  // Touch screens have no reliable hover: a tap opens a memory, and the
+  // next tap elsewhere closes it. Keyboard focus also works.
+  grid.addEventListener('click',event=>{
+    const cup=event.target.closest('.cup');
+    if(!cup) return;
+    if(event.detail===0) { reveal(cup); return; }
+    if(window.matchMedia('(hover: none)').matches) {
+      if(activeCup===cup) closeMemory(cup);
+      else reveal(cup);
+    }
+  });
+  grid.addEventListener('focusin',event=>{
+    const cup=event.target.closest('.cup');
+    if(cup) reveal(cup);
+  });
+  grid.addEventListener('focusout',event=>{
+    const cup=event.target.closest('.cup');
+    if(cup) closeMemory(cup);
+  });
+  document.addEventListener('pointerdown',event=>{
+    if(window.matchMedia('(hover: none)').matches && activeCup && !event.target.closest('.cup')) closeMemory();
+  });
+  document.addEventListener('keydown',event=>{
+    if(event.key==='Escape') closeMemory();
+  });
+</script>
+</body>
+</html>
